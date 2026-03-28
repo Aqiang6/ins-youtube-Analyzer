@@ -55,11 +55,8 @@ async def analyze(url: str):
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.instagram.com/',
-        },
-        # 移除 format 限制，获取所有格式
-        'extract_flat': False,
+        }
     }
-    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -87,83 +84,35 @@ async def analyze(url: str):
                     audio_url = best_audio.get('url')
                 elif audio_formats:
                     audio_url = audio_formats[0].get('url')
-            
-            # 提取所有视频流（有视频编码的）
-            seen_heights = {}
-            video_streams = [f for f in formats if f.get('vcodec') != 'none' and f.get('height')]
-            
-            # 按分辨率分组，为每个分辨率选择最佳质量
-            for f in video_streams:
+
+            # 提取所有分辨率并去重
+            seen_heights = set()
+            for f in formats:
                 height = f.get('height')
-                if not height:
-                    continue
-                
-                # 获取视频质量指标
-                vcodec = f.get('vcodec', '')
-                fps = f.get('fps', 0)
-                tbr = f.get('tbr', 0)  # 总比特率
-                vbr = f.get('vbr', 0)  # 视频比特率
-                ext = f.get('ext', 'mp4')
-                
-                # 计算质量分数（用于选择最佳格式）
-                quality_score = 0
-                # 优先选择 H.264/AVC 编码（兼容性更好）
-                if 'avc1' in vcodec or 'h264' in vcodec:
-                    quality_score += 10
-                # 更高帧率加分
-                if fps >= 60:
-                    quality_score += 5
-                elif fps >= 30:
-                    quality_score += 2
-                # 更高比特率加分
-                quality_score += min(tbr / 1000, 20)  # 最多加20分
-                
-                # 对于同一个分辨率，保存质量最好的
-                if height not in seen_heights or quality_score > seen_heights[height]['quality_score']:
-                    # 判断是否需要合并
-                    needs_merge = f.get('acodec') == 'none' or not f.get('acodec')
+                if height and height not in seen_heights and f.get('vcodec') != 'none':
+                    # 如果 acodec 是 None，说明是 DASH 流（纯视频），需要合并音频
+                    needs_merge = f.get('acodec') == 'none'
                     
-                    # 对于 YouTube，通常视频流没有音频
-                    if 'youtube.com' in url or 'youtu.be' in url:
-                        needs_merge = True
-                    
-                    seen_heights[height] = {
+                    video_options.append({
                         "id": f.get('format_id'),
                         "height": height,
                         "url": f.get('url'),
                         "needsMerge": needs_merge,
-                        "ext": ext,
-                        "fps": fps,
-                        "vcodec": vcodec,
-                        "bitrate": tbr,
-                        "quality_score": quality_score
-                    }
-            
-            # 转换为列表并排序
-            video_options = list(seen_heights.values())
+                        "ext": f.get('ext', 'mp4')
+                    })
+                    seen_heights.add(height)
+
+            # 按分辨率从高到低排序
             video_options.sort(key=lambda x: x['height'], reverse=True)
-            
-            # 移除内部使用的 quality_score
-            for opt in video_options:
-                del opt['quality_score']
-            
-            # 获取视频时长
-            duration = info.get('duration')
-            
-            # 获取标题
-            title = info.get('title', 'Video')
-            
+
             return {
-                "title": sanitize_filename(title),
+                "title": sanitize_filename(info.get('title', 'Video')),
                 "thumbnail": info.get('thumbnail'),
                 "audioUrl": audio_url,
                 "options": video_options,
-                "duration": duration
+                "duration": info.get('duration')
             }
     except Exception as e:
-        print(f"解析错误: {e}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/download")
